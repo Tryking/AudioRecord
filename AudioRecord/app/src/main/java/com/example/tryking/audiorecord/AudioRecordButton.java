@@ -1,114 +1,102 @@
-package com.example.tryking.audiorecord;
+package com.mmbao.maibei.widget.record;
 
-import android.app.Service;
+import android.app.AlertDialog;
 import android.content.Context;
-import android.os.Environment;
 import android.os.Handler;
-import android.os.Message;
 import android.os.Vibrator;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 import android.widget.Button;
 
+import com.mmbao.maibei.R;
+import com.mmbao.maibei.global.ApplicationGlobal;
+
 /**
- * 长按录音：按钮类
- * Created by Tryking on 2016/3/24.
+ * Created by Administrator on 2016/4/14.
  */
-public class AudioRecordButton extends Button {
-
-    // Handler用的标记常量
-    private static final int MSG_AUDIO_PREPARED = 0X01;
-    private static final int MSG_VOICE_CHANGE = 0X02;
-    private static final int MSG_DIALOG_DISMISS = 0X03;
-
-    private static final int STATE_RECORDING = 1;
-    private static final int STATE_WANT_TO_CANCEL = 2;
-    private static final int STATE_NORMAL = 3;
-
-    private int mCurrentState = STATE_NORMAL;
-
+public class AudioRecordButton extends Button implements AudioManager.AudioStageListener {
+    private static final int STATE_NORMAL = 1;
+    private static final int STATE_RECORDING = 2;
+    private static final int STATE_WANT_TO_CANCEL = 3;
     private static final int DISTANCE_Y_CANCEL = 50;
-
+    private int mCurrentState = STATE_NORMAL;
+    // 已经开始录音
+    private boolean isRecording = false;
     private DialogManager mDialogManager;
     private AudioManager mAudioManager;
-    private boolean isRecording = false;
-    private float mTime;
+    private float mTime = 0;
+    // 是否触发了onLongClick，准备好了
+    private boolean mReady;
+    private Vibrator vibrator;//振动
 
-    private boolean mReady;//触发LongClick，准备好了
-
+    /**
+     * 先实现两个参数的构造方法，布局会默认引用这个构造方法， 用一个 构造参数的构造方法来引用这个方法 * @param context
+     */
     public AudioRecordButton(Context context) {
         this(context, null);
     }
 
-    public AudioRecordButton(final Context context, AttributeSet attrs) {
+    public AudioRecordButton(Context context, AttributeSet attrs) {
         super(context, attrs);
-        mDialogManager = new DialogManager(context);
+        mDialogManager = new DialogManager(getContext());
 
-        String dir = Environment.getExternalStorageDirectory() + "/recorder_audios";
+        // 这里没有判断储存卡是否存在，有空要判断
+        String dir = ApplicationGlobal.basePath + "MaiBei_record_audios";
         mAudioManager = AudioManager.getInstance(dir);
-        mAudioManager.setOnAudioStageListener(new AudioManager.AudioStageListener() {
-            @Override
-            public void wellPrepared() {
-                //准备好了，发送一个handler消息
-                mHandler.sendEmptyMessage(MSG_AUDIO_PREPARED);
-            }
-        });
+        mAudioManager.setOnAudioStageListener(this);
+
+        vibrator = (Vibrator) context.getSystemService(Context.VIBRATOR_SERVICE);
 
         setOnLongClickListener(new OnLongClickListener() {
             @Override
             public boolean onLongClick(View v) {
-                mAudioManager.prepareAudio();
-                mReady = true;
-                //调用手机震动器短震
-                Vibrator vibrator = (Vibrator) context.getSystemService(Service.VIBRATOR_SERVICE);
-                vibrator.vibrate(100);
+                startRecording();
                 return false;
             }
         });
     }
 
-    private Handler mHandler = new Handler() {
-        @Override
-        public void handleMessage(Message msg) {
-            switch (msg.what) {
-                case MSG_AUDIO_PREPARED:
-                    mDialogManager.showRecordingDialog();
-                    isRecording = true;
-
-                    // 需要开启一个线程来变换音量
-                    new Thread(mGetVoiceLevelRunnable).start();
-                    break;
-                case MSG_VOICE_CHANGE:
-                    mDialogManager.updateVoiceLevel(mAudioManager.getVoiceLevel(7));
-                    break;
-                case MSG_DIALOG_DISMISS:
-                    break;
+    //开始录音
+    private void startRecording() {
+        try {
+            mAudioManager.startRecording();
+            mReady = true;
+            vibrator.vibrate(50);
+        } catch (Exception e) {
+            if (mAudioManager != null) {
+                mAudioManager.discardRecording();
+                final AlertDialog.Builder builder = new AlertDialog.Builder(getContext())
+                        .setTitle("开启录音权限")
+                        .setMessage("检测到录音失败，请尝试按以下路径开启录音权限:\n\n" + "方式一：在弹出的权限选择框中勾中以后不再提醒，并选择允许\n\n" +
+                                "方式二：360卫士 -> 软件管理 -> 权限管理 -> 微信 -> 使用话筒录音/通话录音 -> 允许")
+                        .setNegativeButton("我知道了", null);
+                builder.create().show();
             }
         }
-    };
+    }
 
     /**
-     * 录音完成后进行回调
+     * 录音完成后的回调，回调给activity，可以获得time和文件的路径
      */
     public interface AudioFinishRecorderListener {
-        /**
-         * 录音成功后可以添加的事项
-         *
-         * @param seconds  录音时间
-         * @param filePath 录音路径
-         */
         void onFinished(float seconds, String filePath);
     }
 
     private AudioFinishRecorderListener mListener;
 
+    /**
+     * 设置录音成功调用的接口
+     *
+     * @param listener
+     */
     public void setAudioFinishRecorderListener(AudioFinishRecorderListener listener) {
         mListener = listener;
     }
 
     // 获取音量大小的runnable
     private Runnable mGetVoiceLevelRunnable = new Runnable() {
+
         @Override
         public void run() {
             while (isRecording) {
@@ -123,12 +111,45 @@ public class AudioRecordButton extends Button {
         }
     };
 
+    // 准备三个常量
+    private static final int MSG_AUDIO_PREPARED = 0X110;
+    private static final int MSG_VOICE_CHANGE = 0X111;
+    private static final int MSG_DIALOG_DISMISS = 0X112;
+
+    private Handler mHandler = new Handler() {
+        public void handleMessage(android.os.Message msg) {
+            switch (msg.what) {
+                case MSG_AUDIO_PREPARED:
+                    // 显示应该是在audio end prepare之后回调
+                    mDialogManager.showRecordingDialog();
+                    isRecording = true;
+                    // 需要开启一个线程来变换音量
+                    new Thread(mGetVoiceLevelRunnable).start();
+                    break;
+                case MSG_VOICE_CHANGE:
+                    mDialogManager.updateVoiceLevel(mAudioManager.getVoiceLevel(7));
+                    break;
+                case MSG_DIALOG_DISMISS:
+                    mDialogManager.dismissDialog();
+                    break;
+            }
+        }
+    };
+
+    // 在这里面发送一个handler的消息
+    @Override
+    public void wellPrepared() {
+        mHandler.sendEmptyMessage(MSG_AUDIO_PREPARED);
+    }
+
+    /**
+     * 直接复写这个监听函数
+     */
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getAction();
         int x = (int) event.getX();
         int y = (int) event.getY();
-
         switch (action) {
             case MotionEvent.ACTION_DOWN:
                 changeState(STATE_RECORDING);
@@ -136,7 +157,7 @@ public class AudioRecordButton extends Button {
             case MotionEvent.ACTION_MOVE:
                 if (isRecording) {
                     // 根据x，y来判断用户是否想要取消
-                    if (wantToChange(x, y)) {
+                    if (wantToCancel(x, y)) {
                         changeState(STATE_WANT_TO_CANCEL);
                     } else {
                         changeState(STATE_RECORDING);
@@ -144,46 +165,43 @@ public class AudioRecordButton extends Button {
                 }
                 break;
             case MotionEvent.ACTION_UP:
+                // 首先判断是否有触发onLongClick事件，没有的话直接返回reset
                 if (!mReady) {
                     reset();
                     return super.onTouchEvent(event);
                 }
                 // 如果按的时间太短，还没准备好或者时间录制太短，就离开了，则显示这个dialog
-                if (!isRecording || mTime < 0.5f) {
+                if (!isRecording || mTime < 0.6f) {
                     mDialogManager.tooShort();
-                    mAudioManager.cancel();
-                    mHandler.sendEmptyMessageDelayed(MSG_DIALOG_DISMISS, 1300);
+                    mAudioManager.discardRecording();
+                    mHandler.sendEmptyMessageDelayed(MSG_DIALOG_DISMISS, 1300);// 持续1.3s
                 } else if (mCurrentState == STATE_RECORDING) {//正常录制结束
-                    mDialogManager.dismissDialog();
-                    mAudioManager.release();
-
+                    mAudioManager.stopRecoding();
                     if (mListener != null) {
                         mListener.onFinished(mTime, mAudioManager.getCurrentFilePath());
                     }
                 } else if (mCurrentState == STATE_WANT_TO_CANCEL) {
-                    mAudioManager.cancel();
-                    mDialogManager.dismissDialog();
+                    // cancel
+                    mAudioManager.discardRecording();
                 }
-                reset();
+                reset();// 恢复标志位
                 break;
         }
         return super.onTouchEvent(event);
     }
 
     /*
-    恢复标志位以及状态
+     * 恢复标志位以及状态
      */
     private void reset() {
         isRecording = false;
+        mDialogManager.dismissDialog();
         changeState(STATE_NORMAL);
         mReady = false;
         mTime = 0;
     }
 
-    /*
-    发生什么会取消发送
-     */
-    private boolean wantToChange(int x, int y) {
+    private boolean wantToCancel(int x, int y) {
         if (x < 0 || x > getWidth()) {// 判断是否在左边，右边，上边，下边
             return true;
         }
@@ -193,24 +211,26 @@ public class AudioRecordButton extends Button {
         return false;
     }
 
+    //改变状态
     private void changeState(int state) {
         if (mCurrentState != state) {
             mCurrentState = state;
             switch (mCurrentState) {
                 case STATE_NORMAL:
-                    setBackgroundResource(R.drawable.button_record_normal);
-                    setText("按住 说话");
+                    this.setBackgroundResource(R.drawable.common_btn_yellow_dash_frame);
+                    this.setText("按住 说话");
                     break;
                 case STATE_RECORDING:
-                    setBackgroundResource(R.drawable.button_recording);
-                    setText("松开 结束");
+                    this.setBackgroundResource(R.drawable.common_btn_yellow_solid);
+                    this.setText("松开 结束");
                     if (isRecording) {
                         mDialogManager.recording();
                     }
                     break;
                 case STATE_WANT_TO_CANCEL:
-                    setBackgroundResource(R.drawable.button_recording);
-                    setText("松开手指，取消发送");
+                    this.setBackgroundResource(R.drawable.common_btn_yellow_solid);
+                    this.setText("松开手指，取消录音");
+                    // dialog want to cancel
                     mDialogManager.wantToCancel();
                     break;
             }
@@ -219,7 +239,6 @@ public class AudioRecordButton extends Button {
 
     @Override
     public boolean onPreDraw() {
-        // TODO Auto-generated method stub
         return false;
     }
 }
